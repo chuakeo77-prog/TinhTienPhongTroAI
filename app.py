@@ -23,9 +23,6 @@ APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "quan_ly_phong_tro.db"
 UPLOAD_DIR = APP_DIR / "uploaded_images"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-# Thư viện ảnh dùng riêng cho ảnh phòng trọ; không ảnh hưởng ảnh đính kèm hóa đơn.
-GALLERY_DIR = APP_DIR / "gallery_images"
-GALLERY_DIR.mkdir(parents=True, exist_ok=True)
 
 st.set_page_config(
     page_title="Hệ Thống Quản Lý Phòng Trọ",
@@ -287,9 +284,8 @@ def local_chat_reply(question):
         )
     if any(k in q for k in ["ảnh", "hình", "hình ảnh"]):
         return (
-            "Bạn có thể vào mục “Thư viện hình ảnh” để tải lên và lưu ảnh phòng trọ, "
-            "hoặc vào “Tính hóa đơn” để đính kèm ảnh đồng hồ điện/nước hay chứng từ vào hóa đơn. "
-            "Hỗ trợ JPG, JPEG, PNG và WEBP."
+            "Trong mục “Tính hóa đơn”, dùng ô “Hình ảnh đính kèm” để chọn ảnh JPG, PNG hoặc WEBP. "
+            "Ảnh sẽ được lưu khi bạn bấm “Lưu hóa đơn vào hệ thống”."
         )
     return (
         "Tôi đang chạy ở chế độ trả lời cơ bản vì chưa có khóa API AI. Tôi có thể trả lời về "
@@ -474,7 +470,7 @@ def bill_text(payload):
 st.sidebar.title("🏠 Quản lý phòng trọ")
 page = st.sidebar.radio(
     "Điều hướng",
-    ["💬 Chatbot quản lý", "🧮 Tính hóa đơn", "🖼️ Thư viện hình ảnh", "🛠️ Admin quản lý"],
+    ["💬 Chatbot quản lý", "🧮 Tính hóa đơn", "🛠️ Admin quản lý"],
     index=0,
 )
 st.sidebar.caption("Giao diện nền trắng, chữ đen. Dữ liệu được lưu trong SQLite.")
@@ -576,105 +572,6 @@ elif page == "🧮 Tính hóa đơn":
             new_id = insert_bill(payload, image_path)
             st.success(f"Đã lưu hóa đơn #{new_id}. Bạn có thể xem, sửa hoặc xóa trong mục Admin.")
             st.rerun()
-
-# -------------------- Thư viện hình ảnh --------------------
-elif page == "🖼️ Thư viện hình ảnh":
-    st.title("🖼️ Thư viện hình ảnh phòng trọ")
-    st.write(
-        "Tải ảnh phòng, nội thất, khu vực chung hoặc hình minh họa lên đây. "
-        "Ảnh được lưu trong thư mục `gallery_images` cạnh file `app.py`, "
-        "nên vẫn còn sau khi bạn đóng hoặc khởi động lại ứng dụng."
-    )
-    st.info("Định dạng hỗ trợ: JPG, JPEG, PNG, WEBP. Mỗi ảnh tối đa 10 MB.")
-
-    with st.form("gallery_upload_form", clear_on_submit=True):
-        gallery_files = st.file_uploader(
-            "Chọn một hoặc nhiều hình ảnh",
-            type=["jpg", "jpeg", "png", "webp"],
-            accept_multiple_files=True,
-            key="gallery_upload_files",
-        )
-        gallery_captions = st.text_input(
-            "Ghi chú chung cho lần tải lên (không bắt buộc)",
-            placeholder="Ví dụ: Phòng 01 sau khi sửa chữa",
-        )
-        gallery_submit = st.form_submit_button(
-            "📤 Tải ảnh lên thư viện", type="primary", use_container_width=True
-        )
-
-    if gallery_submit:
-        if not gallery_files:
-            st.warning("Bạn hãy chọn ít nhất một ảnh trước khi tải lên.")
-        else:
-            saved_count = 0
-            errors = []
-            for image_file in gallery_files:
-                if image_file.size > 10 * 1024 * 1024:
-                    errors.append(f"{image_file.name}: ảnh vượt quá 10 MB.")
-                    continue
-                suffix = Path(image_file.name).suffix.lower()
-                if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
-                    errors.append(f"{image_file.name}: định dạng không được hỗ trợ.")
-                    continue
-                safe_stem = "".join(
-                    ch if ch.isalnum() or ch in {"-", "_"} else "_"
-                    for ch in Path(image_file.name).stem
-                ).strip("._")[:60] or "hinh_anh"
-                unique_name = (
-                    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
-                    f"{secrets.token_hex(4)}_{safe_stem}{suffix}"
-                )
-                destination = GALLERY_DIR / unique_name
-                destination.write_bytes(image_file.getbuffer())
-                # Lưu ghi chú riêng cạnh ảnh, không cần thêm bảng database.
-                if gallery_captions.strip():
-                    destination.with_suffix(destination.suffix + ".txt").write_text(
-                        gallery_captions.strip(), encoding="utf-8"
-                    )
-                saved_count += 1
-            if saved_count:
-                st.success(f"Đã lưu {saved_count} ảnh vào thư viện.")
-            for error in errors:
-                st.error(error)
-            if saved_count:
-                st.rerun()
-
-    st.divider()
-    st.subheader("📚 Ảnh đã lưu")
-    image_files = sorted(
-        [f for f in GALLERY_DIR.iterdir()
-         if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-    if not image_files:
-        st.info("Thư viện chưa có ảnh. Chọn ảnh ở phía trên để bắt đầu.")
-    else:
-        st.caption(f"Tổng số ảnh: {len(image_files)}")
-        columns_per_row = 3
-        for start in range(0, len(image_files), columns_per_row):
-            cols = st.columns(columns_per_row)
-            for col, image_path in zip(cols, image_files[start:start + columns_per_row]):
-                with col:
-                    st.image(str(image_path), use_container_width=True)
-                    caption_path = image_path.with_suffix(image_path.suffix + ".txt")
-                    caption_text = ""
-                    if caption_path.is_file():
-                        try:
-                            caption_text = caption_path.read_text(encoding="utf-8").strip()
-                        except OSError:
-                            caption_text = ""
-                    st.caption(caption_text or image_path.name)
-                    st.caption(f"Dung lượng: {image_path.stat().st_size / (1024 * 1024):.2f} MB")
-                    with st.expander("🗑️ Tùy chọn ảnh", expanded=False):
-                        if st.button("Xóa ảnh này", key=f"delete_gallery_{image_path.name}"):
-                            try:
-                                image_path.unlink(missing_ok=True)
-                                caption_path.unlink(missing_ok=True)
-                                st.success("Đã xóa ảnh khỏi thư viện.")
-                                st.rerun()
-                            except OSError as exc:
-                                st.error(f"Không thể xóa ảnh: {exc}")
 
 # -------------------- Admin --------------------
 else:
