@@ -1,0 +1,2 @@
+# TinhTienPhongTroAI
+requirements.txt
