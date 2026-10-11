@@ -1,6 +1,9 @@
 import streamlit as st
 import requests
+import sqlite3
+import json
 from datetime import datetime
+from pathlib import Path
 
 # ============================================================
 # CẤU HÌNH TRANG
@@ -8,7 +11,8 @@ from datetime import datetime
 st.set_page_config(
     page_title="App Tính Tiền Phòng Trọ",
     page_icon="🏠",
-    layout="centered"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ============================================================
@@ -17,6 +21,76 @@ st.set_page_config(
 # Có thể đổi IMAGE_PATH bên dưới theo tên file của bạn.
 # ============================================================
 IMAGE_PATH = "logo.jpg"
+
+# ============================================================
+# GIAO DIỆN: NỀN SÁNG, CHỮ RÕ, THẺ NỘI DUNG DỄ ĐỌC
+# ============================================================
+st.markdown("""
+<style>
+.stApp { background: linear-gradient(135deg, #f4f8ff 0%, #f8fbff 55%, #eef6ff 100%); color: #172033; }
+[data-testid="stHeader"] { background: rgba(244,248,255,0.88); }
+[data-testid="stSidebar"] { background: #eaf1fb; border-right: 1px solid #d7e3f4; }
+[data-testid="stSidebar"] * { color: #172033; }
+.stMarkdown, .stText, label, p, li { color: #172033; }
+[data-testid="stMetric"] { background: #ffffff; border: 1px solid #dbe5f2; padding: 16px; border-radius: 14px; box-shadow: 0 3px 12px rgba(28,55,90,.06); }
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 14px; }
+.stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 600; min-height: 2.7rem; }
+.stButton > button[kind="primary"] { background: #2563eb; border-color: #2563eb; }
+input, textarea, [data-baseweb="select"] > div { background-color: #ffffff !important; }
+hr { border-color: #d7e3f4; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# CƠ SỞ DỮ LIỆU SQLITE: LƯU LỊCH SỬ HÓA ĐƠN
+# ============================================================
+DB_FILE = "phongtro_data.db"
+
+def ket_noi_db():
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            tenant_name TEXT,
+            room_code TEXT,
+            billing_period TEXT,
+            total_amount REAL NOT NULL,
+            invoice_text TEXT NOT NULL,
+            invoice_data TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
+
+def luu_hoa_don_db(tenant_name, room_code, billing_period, total_amount, invoice_text, invoice_data):
+    conn = ket_noi_db()
+    conn.execute(
+        "INSERT INTO invoices (created_at, tenant_name, room_code, billing_period, total_amount, invoice_text, invoice_data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tenant_name, room_code, billing_period,
+         float(total_amount), invoice_text, json.dumps(invoice_data, ensure_ascii=False))
+    )
+    conn.commit()
+    conn.close()
+
+def lay_hoa_don_db():
+    conn = ket_noi_db()
+    rows = conn.execute("SELECT * FROM invoices ORDER BY id DESC").fetchall()
+    conn.close()
+    return rows
+
+def xoa_hoa_don_db(invoice_id):
+    conn = ket_noi_db()
+    conn.execute("DELETE FROM invoices WHERE id = ?", (int(invoice_id),))
+    conn.commit()
+    conn.close()
+
+def xoa_tat_ca_hoa_don_db():
+    conn = ket_noi_db()
+    conn.execute("DELETE FROM invoices")
+    conn.commit()
+    conn.close()
 
 # ============================================================
 # HÀM HỖ TRỢ
@@ -214,6 +288,20 @@ else:
         use_container_width=True
     )
 
+    st.caption("Lưu hóa đơn vào lịch sử để Admin có thể xem, tải lại hoặc xóa sau này.")
+    if st.button("💾 Lưu hóa đơn vào hệ thống", type="primary", use_container_width=True):
+        invoice_data = {
+            "tenant_name": ten_khach, "room_code": ma_phong, "billing_period": thang_nam,
+            "electric_old": dien_cu, "electric_new": dien_moi, "electric_used": so_dien_tieu_thu,
+            "water_old": nuoc_cu, "water_new": nuoc_moi, "water_used": so_nuoc_tieu_thu,
+            "rent": gia_phong, "electric_price": gia_dien, "water_price": gia_nuoc,
+            "wifi": gia_wifi, "trash": gia_rac, "electric_total": tien_dien,
+            "water_total": tien_nuoc, "total": tong_tien, "members": so_nguoi,
+            "per_person": tien_moi_nguoi
+        }
+        luu_hoa_don_db(ten_khach, ma_phong, thang_nam, tong_tien, noi_dung_hoa_don, invoice_data)
+        st.success("Đã lưu hóa đơn vào hệ thống. Admin có thể quản lý trong mục Quản trị Admin bên dưới.")
+
 # ============================================================
 # CHATBOT AI
 # ============================================================
@@ -277,3 +365,109 @@ if st.button("🗑️ Xóa lịch sử trò chuyện", use_container_width=True)
         {"role": "assistant", "content": "Xin chào! Tôi là trợ lý AI. Bạn muốn hỏi gì?"}
     ]
     st.rerun()
+
+
+# ============================================================
+# KHU VỰC QUẢN TRỊ ADMIN: XEM / TẢI / XÓA HÓA ĐƠN
+# ============================================================
+st.divider()
+st.header("🔐 Quản trị Admin")
+st.write("Đăng nhập để xem lịch sử hóa đơn đã lưu, tải lại hóa đơn hoặc xóa các bản ghi.")
+
+admin_password_from_secrets = ""
+try:
+    admin_password_from_secrets = st.secrets.get("ADMIN_PASSWORD", "")
+except Exception:
+    admin_password_from_secrets = ""
+ADMIN_PASSWORD = admin_password_from_secrets or "admin123"
+
+if "admin_logged_in_phongtro" not in st.session_state:
+    st.session_state.admin_logged_in_phongtro = False
+
+if not st.session_state.admin_logged_in_phongtro:
+    with st.form("admin_login_form"):
+        admin_password_input = st.text_input("Mật khẩu Admin", type="password", placeholder="Nhập mật khẩu quản trị")
+        login_clicked = st.form_submit_button("🔓 Đăng nhập Admin", use_container_width=True)
+    if login_clicked:
+        if admin_password_input == ADMIN_PASSWORD:
+            st.session_state.admin_logged_in_phongtro = True
+            st.success("Đăng nhập Admin thành công.")
+            st.rerun()
+        else:
+            st.error("Mật khẩu chưa đúng. Vui lòng thử lại.")
+    if not admin_password_from_secrets:
+        st.warning("Mật khẩu mặc định hiện tại là admin123. Hãy đặt ADMIN_PASSWORD trong Streamlit Secrets trước khi triển khai công khai.")
+else:
+    head_col1, head_col2 = st.columns([4, 1])
+    with head_col1:
+        st.success("Bạn đang đăng nhập với quyền quản trị.")
+    with head_col2:
+        if st.button("🚪 Đăng xuất", use_container_width=True):
+            st.session_state.admin_logged_in_phongtro = False
+            st.rerun()
+
+    tab_tongquan, tab_hoadon, tab_caidat = st.tabs(["📊 Tổng quan", "🧾 Quản lý hóa đơn", "⚙️ Cấu hình hiện tại"])
+    invoices = lay_hoa_don_db()
+    with tab_tongquan:
+        tong_so_hoa_don = len(invoices)
+        tong_doanh_thu = sum(float(row["total_amount"]) for row in invoices)
+        phong_da_luu = len({row["room_code"] for row in invoices if row["room_code"]})
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Tổng hóa đơn đã lưu", f"{tong_so_hoa_don}")
+        k2.metric("Tổng tiền hóa đơn đã lưu", dinh_dang_tien(tong_doanh_thu))
+        k3.metric("Số phòng có hóa đơn", f"{phong_da_luu}")
+        st.caption("Thống kê chỉ tính các hóa đơn đã bấm nút Lưu hóa đơn vào hệ thống.")
+    with tab_hoadon:
+        st.subheader("📚 Danh sách hóa đơn")
+        if not invoices:
+            st.info("Chưa có hóa đơn nào được lưu. Hãy tính hóa đơn ở phía trên và bấm ‘Lưu hóa đơn vào hệ thống’.")
+        else:
+            search_text = st.text_input("🔎 Tìm theo tên khách, mã phòng hoặc kỳ thanh toán", key="admin_invoice_search")
+            filtered_invoices = [
+                row for row in invoices
+                if search_text.strip().lower() in " ".join([
+                    str(row["tenant_name"] or ""), str(row["room_code"] or ""), str(row["billing_period"] or "")
+                ]).lower()
+            ]
+            st.caption(f"Đang hiển thị {len(filtered_invoices)} / {len(invoices)} hóa đơn")
+            for row in filtered_invoices:
+                with st.expander(
+                    f"#{row['id']} · Phòng {row['room_code'] or 'Chưa nhập'} · {row['tenant_name'] or 'Chưa nhập tên'} · {row['billing_period'] or 'Chưa có kỳ'} · {dinh_dang_tien(row['total_amount'])}"
+                ):
+                    st.write(f"**Ngày lưu:** {row['created_at']}")
+                    st.text(row["invoice_text"])
+                    safe_room = "".join(c if c.isalnum() or c in "_-." else "_" for c in (row["room_code"] or "phong_tro"))
+                    safe_period = "".join(c if c.isalnum() or c in "_-." else "_" for c in (row["billing_period"] or "ky_thanh_toan").replace("/", "-"))
+                    dcol, xcol = st.columns([2, 1])
+                    with dcol:
+                        st.download_button(
+                            "⬇️ Tải hóa đơn này",
+                            data=row["invoice_text"],
+                            file_name=f"hoa_don_{safe_room}_{safe_period}_{row['id']}.txt",
+                            mime="text/plain",
+                            key=f"download_invoice_{row['id']}",
+                            use_container_width=True
+                        )
+                    with xcol:
+                        if st.button("🗑️ Xóa hóa đơn", key=f"delete_invoice_{row['id']}", use_container_width=True):
+                            xoa_hoa_don_db(row["id"])
+                            st.success(f"Đã xóa hóa đơn #{row['id']}.")
+                            st.rerun()
+            if invoices:
+                with st.expander("⚠️ Xóa toàn bộ lịch sử hóa đơn"):
+                    st.warning("Thao tác này xóa tất cả hóa đơn đã lưu trong cơ sở dữ liệu và không thể hoàn tác.")
+                    xac_nhan_xoa = st.checkbox("Tôi xác nhận muốn xóa toàn bộ hóa đơn", key="confirm_delete_all_invoices")
+                    if st.button("Xóa toàn bộ hóa đơn", type="primary", disabled=not xac_nhan_xoa, key="delete_all_invoices"):
+                        xoa_tat_ca_hoa_don_db()
+                        st.success("Đã xóa toàn bộ lịch sử hóa đơn.")
+                        st.rerun()
+    with tab_caidat:
+        st.subheader("Bảng giá đang áp dụng trên phiên hiện tại")
+        st.dataframe([
+            {"Khoản mục": "Tiền phòng", "Đơn giá (VNĐ)": gia_phong},
+            {"Khoản mục": "Điện / kWh", "Đơn giá (VNĐ)": gia_dien},
+            {"Khoản mục": "Nước / khối", "Đơn giá (VNĐ)": gia_nuoc},
+            {"Khoản mục": "Wifi / phòng", "Đơn giá (VNĐ)": gia_wifi},
+            {"Khoản mục": "Rác & dịch vụ", "Đơn giá (VNĐ)": gia_rac},
+        ], use_container_width=True, hide_index=True)
+        st.info("Điều chỉnh bảng giá ở thanh bên trái. Bảng giá hiện tại không tự lưu sau khi khởi động lại ứng dụng; hóa đơn đã lưu giữ nguyên số liệu tại thời điểm tạo.")
